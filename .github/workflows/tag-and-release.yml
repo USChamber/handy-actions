@@ -116,7 +116,7 @@ jobs:
 
       # Create Sentry releases
       - name: Create Sentry releases
-        if: secrets.sentry_auth_token != '' && secrets.sentry_org != '' && inputs.sentry_projects != '[]'
+        if: inputs.sentry_projects != '[]'
         shell: bash
         run: |
           # Parse the JSON array from inputs
@@ -149,7 +149,6 @@ jobs:
 
       # Create Jira version
       - name: Create Jira Version (Unreleased)
-        if: secrets.jira_auth != ''
         id: create-version
         run: |
           echo "Creating Jira version ${{ env.NEW_TAG }} (unreleased)..."
@@ -170,7 +169,6 @@ jobs:
 
       # Get Jira IDs from commits
       - name: Get Jira IDs from Recent Commits
-        if: secrets.jira_auth != ''
         id: get-jira-ids
         run: |
           # Extract Jira issue IDs from commit messages
@@ -188,7 +186,7 @@ jobs:
 
       # Update Jira issues from commits
       - name: Move Commit-Related Issues to Released to Prod and Add to Version
-        if: secrets.jira_auth != '' && env.COMMIT_JIRA_IDS != ''
+        if: env.COMMIT_JIRA_IDS != ''
         run: |
           # For each Jira ID found in commits, update its status and add to version
           for ISSUE_KEY in $COMMIT_JIRA_IDS; do
@@ -249,7 +247,6 @@ jobs:
 
       # Find and update issues without versions
       - name: Find and Update Issues Without Versions
-        if: secrets.jira_auth != ''
         run: |
           echo "Finding issues in 'Released to Prod' status without a version..."
           
@@ -282,7 +279,7 @@ jobs:
 
       # Mark Jira version as released
       - name: Mark Jira Version as Released
-        if: secrets.jira_auth != '' && env.FOUND_ANY_ISSUES == 'true'
+        if: env.FOUND_ANY_ISSUES == 'true'
         run: |
           echo "Issues were found and added to the version, marking version $VERSION_ID as released..."
           
@@ -296,6 +293,6 @@ jobs:
           echo "Version marked as released"
 
       - name: Keep Version Unreleased If No Issues Found
-        if: secrets.jira_auth != '' && env.FOUND_ANY_ISSUES != 'true'
+        if: env.FOUND_ANY_ISSUES != 'true'
         run: |
           echo "No issues were found to add to this version. Keeping version $VERSION_ID as unreleased."
