@@ -1,0 +1,301 @@
+name: Reusable Tag and Release Action
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        description: 'The branch name to monitor for merged PRs'
+        required: false
+        type: string
+        default: 'production'
+      sentry_projects:
+        description: 'JSON array of Sentry projects to create releases for [{name: "project-name", sourceMapPath: "optional/path"}]'
+        required: false
+        type: string
+        default: '[]'
+      jira_project_id:
+        description: 'Jira project ID to create versions for'
+        required: false
+        type: string
+        default: '10017'
+      jira_transition_id:
+        description: 'ID of the "Released to Prod" transition in Jira'
+        required: false
+        type: string
+        default: '41'
+      commits_to_search:
+        description: 'Number of recent commits to search for Jira IDs'
+        required: false
+        type: number
+        default: 5
+      jira_issue_prefixes:
+        description: 'Regex pattern to identify Jira issue keys in commit messages'
+        required: false
+        type: string
+        default: '(ENG|CO|FND|USCC|CL)-[0-9]+'
+    secrets:
+      app_id:
+        description: 'GitHub App ID for generating token'
+        required: true
+      private_key:
+        description: 'GitHub App private key for generating token'
+        required: true
+      sentry_auth_token:
+        description: 'Sentry authentication token'
+        required: false
+      sentry_org:
+        description: 'Sentry organization name'
+        required: false
+      jira_auth:
+        description: 'Base64 encoded Jira authentication'
+        required: false
+
+jobs:
+  tag-release:
+    name: Bump and Tag Version
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      # Generates an access token via our Github App
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.private_key }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Creates a tag based on the last tag in the repository
+      - name: Create NEW_TAG variable
+        run: |
+          LAST_TAG=$(git describe --tags `git rev-list --tags --max-count=1` 2>/dev/null || echo "0000.0")
+          
+          # get the first number from the last tag (i.e. 2023.14 => 2023)
+          CURRENT_TAG_YEAR=$(echo $LAST_TAG | grep -o '^[0-9]*')
+          # get the current year
+          CURRENT_YEAR=$(date +'%Y')
+          
+          if [ $CURRENT_YEAR -gt $CURRENT_TAG_YEAR ]; then
+            NEW_RELEASE_NUMBER=1
+            NEW_YEAR=$CURRENT_YEAR
+          else
+            # Get the final version number of last tag (i.e. 2023.14 => 14)
+            NEW_RELEASE_NUMBER=$(echo $LAST_TAG | grep -oE '([0-9]+)$' | awk '{print $1+1}')
+            NEW_YEAR=$CURRENT_TAG_YEAR
+          fi
+          
+          LIGHTWEIGHT_TAG="$NEW_YEAR.$NEW_RELEASE_NUMBER"
+          
+          echo "New tag: $LIGHTWEIGHT_TAG"
+          echo "NEW_TAG=$LIGHTWEIGHT_TAG" >> $GITHUB_ENV
+
+        shell: bash
+
+      # Pushes the new tag to the the current commit in the repository
+      - name: Create new tag
+        uses: anothrNick/github-tag-action@1.70.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CUSTOM_TAG: ${{ env.NEW_TAG }}
+
+      # Generates a release with release notes
+      - name: Generate release notes
+        uses: ncipollo/release-action@v1.14.0
+        with:
+          name: ${{ env.NEW_TAG }}
+          tag: "refs/tags/${{ env.NEW_TAG }}"
+          generateReleaseNotes: true
+
+      # Create Sentry releases
+      - name: Create Sentry releases
+        if: secrets.sentry_auth_token != '' && secrets.sentry_org != '' && inputs.sentry_projects != '[]'
+        shell: bash
+        run: |
+          # Parse the JSON array from inputs
+          SENTRY_PROJECTS='${{ inputs.sentry_projects }}'
+          
+          # Loop through each project in the JSON array
+          echo "$SENTRY_PROJECTS" | jq -c '.[]' | while read -r project; do
+            PROJECT_NAME=$(echo "$project" | jq -r '.name')
+            SOURCE_MAP_PATH=$(echo "$project" | jq -r '.sourceMapPath // ""')
+          
+            echo "Creating Sentry release for $PROJECT_NAME"
+          
+            if [ -n "$SOURCE_MAP_PATH" ]; then
+              # With source map path
+              echo "Using source map path: $SOURCE_MAP_PATH"
+              npx @sentry/cli releases new ${{ env.NEW_TAG }} --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+              npx @sentry/cli releases files ${{ env.NEW_TAG }} upload-sourcemaps $SOURCE_MAP_PATH --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+              npx @sentry/cli releases finalize ${{ env.NEW_TAG }} --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+              npx @sentry/cli releases deploys ${{ env.NEW_TAG }} new -e production --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+            else
+              # Without source map path
+              npx @sentry/cli releases new ${{ env.NEW_TAG }} --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+              npx @sentry/cli releases finalize ${{ env.NEW_TAG }} --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+              npx @sentry/cli releases deploys ${{ env.NEW_TAG }} new -e production --org=${{ secrets.sentry_org }} --project=$PROJECT_NAME
+            fi
+          done
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.sentry_auth_token }}
+          SENTRY_ORG: ${{ secrets.sentry_org }}
+
+      # Create Jira version
+      - name: Create Jira Version (Unreleased)
+        if: secrets.jira_auth != ''
+        id: create-version
+        run: |
+          echo "Creating Jira version ${{ env.NEW_TAG }} (unreleased)..."
+          
+          # Create the version in Jira (unreleased)
+          VERSION_JSON=$(curl -X POST \
+            -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+            -H "Content-Type: application/json" \
+            --data "{\"name\":\"${{ env.NEW_TAG }}\",\"projectId\":\"${{ inputs.jira_project_id }}\",\"released\":false}" \
+            "https://uschamber.atlassian.net/rest/api/3/version")
+          
+          VERSION_ID=$(echo $VERSION_JSON | jq -r '.id')
+          echo "VERSION_ID=$VERSION_ID" >> $GITHUB_ENV
+          echo "Created Jira version with ID: $VERSION_ID"
+          
+          # Initialize flag to track if we found any issues
+          echo "FOUND_ANY_ISSUES=false" >> $GITHUB_ENV
+
+      # Get Jira IDs from commits
+      - name: Get Jira IDs from Recent Commits
+        if: secrets.jira_auth != ''
+        id: get-jira-ids
+        run: |
+          # Extract Jira issue IDs from commit messages
+          COMMIT_JIRA_IDS=$(git log -n ${{ inputs.commits_to_search }} --pretty=format:"%s" | grep -o -E '${{ inputs.jira_issue_prefixes }}' | sort -u | tr '\n' ' ')
+
+          if [ -n "$COMMIT_JIRA_IDS" ]; then
+            echo "Found these Jira IDs in recent commits: $COMMIT_JIRA_IDS"
+            echo "COMMIT_JIRA_IDS=${COMMIT_JIRA_IDS}" >> $GITHUB_ENV
+            echo "jira_ids=${COMMIT_JIRA_IDS}" >> $GITHUB_OUTPUT
+          else
+            echo "No Jira IDs found in recent commits"
+            echo "COMMIT_JIRA_IDS=" >> $GITHUB_ENV
+            echo "jira_ids=" >> $GITHUB_OUTPUT
+          fi
+
+      # Update Jira issues from commits
+      - name: Move Commit-Related Issues to Released to Prod and Add to Version
+        if: secrets.jira_auth != '' && env.COMMIT_JIRA_IDS != ''
+        run: |
+          # For each Jira ID found in commits, update its status and add to version
+          for ISSUE_KEY in $COMMIT_JIRA_IDS; do
+            echo "Processing issue $ISSUE_KEY..."
+          
+            # Check if issue already has a fixVersion
+            HAS_FIX_VERSION=$(curl -s -X GET \
+              -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+              -H "Content-Type: application/json" \
+              "https://uschamber.atlassian.net/rest/api/3/issue/$ISSUE_KEY?fields=fixVersions" | jq -r '.fields.fixVersions | length')
+          
+            if [ "$HAS_FIX_VERSION" -eq 0 ]; then
+              # Try to move to "Released to Prod" status
+              TRANSITION_RESULT=$(curl -s -X POST \
+                -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+                -H "Content-Type: application/json" \
+                --data "{\"transition\":{\"id\":\"${{ inputs.jira_transition_id }}\"}}" \
+                "https://uschamber.atlassian.net/rest/api/3/issue/$ISSUE_KEY/transitions")
+          
+              # Check if transition was successful
+              if [[ "$TRANSITION_RESULT" == *"errorMessages"* ]]; then
+                echo "Could not find Released to Prod transition for $ISSUE_KEY, checking if already in that status..."
+          
+                # Check current status
+                CURRENT_STATUS=$(curl -s -X GET \
+                  -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+                  -H "Content-Type: application/json" \
+                  "https://uschamber.atlassian.net/rest/api/3/issue/$ISSUE_KEY?fields=status" | jq -r '.fields.status.name')
+          
+                if [ "$CURRENT_STATUS" = "Released to Prod" ]; then
+                  # Add the version to the issue if it's already in Released to Prod but doesn't have a version
+                  curl -s -X PUT \
+                    -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+                    -H "Content-Type: application/json" \
+                    --data "{\"update\":{\"fixVersions\":[{\"add\":{\"id\":\"$VERSION_ID\"}}]}}" \
+                    "https://uschamber.atlassian.net/rest/api/3/issue/$ISSUE_KEY"
+          
+                  echo "Updated issue $ISSUE_KEY (already in Released to Prod): Added to version $VERSION_ID"
+                  echo "FOUND_ANY_ISSUES=true" >> $GITHUB_ENV
+                else
+                  echo "Issue $ISSUE_KEY is in status '$CURRENT_STATUS' and cannot be moved to Released to Prod"
+                fi
+              else
+                # Add the version to the issue if transition was successful
+                curl -s -X PUT \
+                  -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+                  -H "Content-Type: application/json" \
+                  --data "{\"update\":{\"fixVersions\":[{\"add\":{\"id\":\"$VERSION_ID\"}}]}}" \
+                  "https://uschamber.atlassian.net/rest/api/3/issue/$ISSUE_KEY"
+          
+                echo "Updated issue $ISSUE_KEY: Added to version $VERSION_ID"
+                echo "FOUND_ANY_ISSUES=true" >> $GITHUB_ENV
+              fi
+            else
+              echo "Issue $ISSUE_KEY already has a fixVersion assigned, skipping version assignment"
+            fi
+          done
+
+      # Find and update issues without versions
+      - name: Find and Update Issues Without Versions
+        if: secrets.jira_auth != ''
+        run: |
+          echo "Finding issues in 'Released to Prod' status without a version..."
+          
+          # JQL to find issues in "Released to Prod" status without a version
+          JIRA_URL='https://uschamber.atlassian.net/rest/api/3/search?jql=project%20%3D%20${{ inputs.jira_project_id }}%20AND%20status%3D%22Released%20to%20Prod%22%20AND%20fixVersion%20is%20EMPTY&fields=key'
+          ISSUES=$(curl -s -X GET \
+            -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+            -H "Content-Type: application/json" \
+            "$JIRA_URL" | jq -r '.issues[].key')
+          
+          if [ -z "$ISSUES" ]; then
+            echo "No additional issues found to update"
+          else
+            echo "Found additional issues to update: $ISSUES"
+          
+            # For each issue, add the version
+            for ISSUE in $ISSUES; do
+              echo "Updating issue $ISSUE with version $VERSION_ID..."
+          
+              curl -s -X PUT \
+                -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+                -H "Content-Type: application/json" \
+                --data "{\"update\":{\"fixVersions\":[{\"add\":{\"id\":\"$VERSION_ID\"}}]}}" \
+                "https://uschamber.atlassian.net/rest/api/3/issue/$ISSUE"
+          
+              echo "Updated issue $ISSUE"
+              echo "FOUND_ANY_ISSUES=true" >> $GITHUB_ENV
+            done
+          fi
+
+      # Mark Jira version as released
+      - name: Mark Jira Version as Released
+        if: secrets.jira_auth != '' && env.FOUND_ANY_ISSUES == 'true'
+        run: |
+          echo "Issues were found and added to the version, marking version $VERSION_ID as released..."
+          
+          # Mark the version as released
+          curl -s -X PUT \
+            -H "Authorization: Basic ${{ secrets.jira_auth }}" \
+            -H "Content-Type: application/json" \
+            --data "{\"released\":true,\"releaseDate\":\"$(date +'%Y-%m-%d')\"}" \
+            "https://uschamber.atlassian.net/rest/api/3/version/$VERSION_ID"
+          
+          echo "Version marked as released"
+
+      - name: Keep Version Unreleased If No Issues Found
+        if: secrets.jira_auth != '' && env.FOUND_ANY_ISSUES != 'true'
+        run: |
+          echo "No issues were found to add to this version. Keeping version $VERSION_ID as unreleased."
