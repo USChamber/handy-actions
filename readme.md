@@ -31,7 +31,7 @@ on:
 jobs:
   call-tag-and-release:
     if: github.event.pull_request.merged == true
-    uses: your-org/reusable-actions/.github/workflows/tag-and-release.yml@main
+    uses: USChamber/handy-actions/.github/workflows/tag-and-release.yml@main
     with:
       # Optional configurations
       branch_name: 'production'
