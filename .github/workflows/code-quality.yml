@@ -1,0 +1,107 @@
+name: Reusable Code Quality Checks
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+      php_version:
+        description: 'PHP version to use'
+        required: false
+        type: string
+        default: '8.2'
+      eslint_target:
+        description: 'Path(s) to run ESLint on'
+        required: false
+        type: string
+        default: './src/js/app.js'
+      run_eslint:
+        description: 'Whether to run ESLint checks'
+        required: false
+        type: boolean
+        default: true
+      run_php_checks:
+        description: 'Whether to run PHP checks (ECS and PHPStan)'
+        required: false
+        type: boolean
+        default: true
+      php_extensions:
+        description: 'PHP extensions to install'
+        required: false
+        type: string
+        default: 'bcmath,ctype,curl,dom,iconv,imagick,intl,json,mbstring,openssl,pcre,pdo,reflection,spl,zip'
+      php_ini_values:
+        description: 'PHP ini values to set'
+        required: false
+        type: string
+        default: 'post_max_size=256M, max_execution_time=180, memory_limit=512M'
+    secrets:
+      gh_token:
+        description: 'GitHub token for Composer operations'
+        required: false
+
+jobs:
+  fed_code_analysis:
+    name: 'JS Coding Standards [ESLint]'
+    if: inputs.run_eslint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: 'Install Node dependencies'
+        run: npm install
+
+      - name: 'Run ESLint'
+        run: npx eslint ${{ inputs.eslint_target }} --fix
+
+  php_code_analysis:
+    if: inputs.run_php_checks
+    strategy:
+      fail-fast: false
+      matrix:
+        actions:
+          - name: 'PHP Coding Standards [ECS]'
+            run: composer check-cs
+          - name: 'PHP Coding Standards [PHPStan]'
+            run: composer phpstan
+
+    name: ${{ matrix.actions.name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Setup PHP
+        id: setup-php
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php_version }}
+          extensions: ${{ inputs.php_extensions }}
+          ini-values: ${{ inputs.php_ini_values }}
+          tools: composer:v2
+          github-token: ${{ secrets.gh_token }}
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --no-ansi --no-progress --prefer-dist
+
+      - run: ${{ matrix.actions.run }}

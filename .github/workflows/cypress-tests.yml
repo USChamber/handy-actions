@@ -1,0 +1,67 @@
+name: Reusable Cypress Tests
+
+on:
+  workflow_call:
+    inputs:
+      base_url:
+        description: 'Testing Domain URL'
+        required: true
+        type: string
+      cypress_project_id:
+        description: 'Cypress Cloud Project ID'
+        required: true
+        type: string
+      commit_message:
+        description: 'Custom commit message for Cypress Dashboard'
+        required: false
+        type: string
+        default: 'Running Cypress Tests'
+      record:
+        description: 'Whether to record test results to Cypress Dashboard'
+        required: false
+        type: boolean
+        default: true
+      node_version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+      browser:
+        description: 'Browser to use for tests (chrome, firefox, edge, electron)'
+        required: false
+        type: string
+        default: 'electron'
+      spec:
+        description: 'Specific spec file(s) to run (optional)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      cypress_record_key:
+        description: 'Cypress Cloud record key'
+        required: true
+      github_token:
+        description: 'GitHub token for Cypress GitHub integration'
+        required: false
+
+jobs:
+  cypress-run:
+    name: Run Cypress Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Cypress
+        uses: cypress-io/github-action@v6
+        with:
+          record: ${{ inputs.record }}
+          browser: ${{ inputs.browser }}
+          spec: ${{ inputs.spec }}
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.cypress_record_key }}
+          CYPRESS_baseUrl: ${{ inputs.base_url }}
+          GITHUB_TOKEN: ${{ secrets.github_token || github.token }}
+          COMMIT_INFO_MESSAGE: ${{ inputs.commit_message }}
+          CYPRESS_PROJECT_ID: ${{ inputs.cypress_project_id }}
