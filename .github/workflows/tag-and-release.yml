@@ -252,15 +252,18 @@ jobs:
           
           # JQL to find issues in "Released to Prod" status without a version
           JIRA_URL='https://uschamber.atlassian.net/rest/api/3/search?jql=project%20%3D%20${{ inputs.jira_project_id }}%20AND%20status%3D%22Released%20to%20Prod%22%20AND%20fixVersion%20is%20EMPTY&fields=key'
-          ISSUES=$(curl -s -X GET \
+          RESPONSE=$(curl -s -X GET \
             -H "Authorization: Basic ${{ secrets.jira_auth }}" \
             -H "Content-Type: application/json" \
-            "$JIRA_URL" | jq -r '.issues[].key')
+            "$JIRA_URL")
           
-          if [ -z "$ISSUES" ]; then
-            echo "No additional issues found to update"
-          else
-            echo "Found additional issues to update: $ISSUES"
+            # Check if response has issues array and it's not null
+            ISSUES=$(echo "$RESPONSE" | jq -r '.issues // [] | .[].key')
+    
+            if [ -z "$ISSUES" ]; then
+              echo "No additional issues found to update"
+            else
+              echo "Found additional issues to update: $ISSUES"
           
             # For each issue, add the version
             for ISSUE in $ISSUES; do
