@@ -7,12 +7,12 @@ on:
         description: 'Node.js version to use'
         required: false
         type: string
-        default: '20'
+        default: '22'
       php_version:
         description: 'PHP version to use'
         required: false
         type: string
-        default: '8.2'
+        default: '8.3'
       eslint_target:
         description: 'Path(s) to run ESLint on'
         required: false

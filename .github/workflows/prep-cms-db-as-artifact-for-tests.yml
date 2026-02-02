@@ -1,0 +1,89 @@
+name: Prep Test DB Artifact (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      servd_project_slug:
+        description: 'Servd project slug'
+        required: true
+        type: string
+      servd_environment:
+        description: 'Servd environment'
+        required: false
+        type: string
+        default: 'production'
+    secrets:
+      servd_security_key:
+        description: 'Servd security key'
+        required: true
+
+jobs:
+  dump-database:
+    runs-on: ubuntu-latest
+
+    env:
+      SERVD_ENVIRONMENT: ${{ inputs.servd_environment }}
+      SERVD_PROJECT_SLUG: ${{ inputs.servd_project_slug }}
+      SERVD_SECURITY_KEY: ${{ secrets.servd_security_key }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Enable remote database connectivity
+        run: |
+          echo "Enabling database access on Servd..."
+
+          RESPONSE=$(curl -s -X POST https://app.servd.host/enable-remote-database-connectivity \
+            -H "Content-Type: application/json" \
+            -d "{\"slug\":\"$SERVD_PROJECT_SLUG\",\"key\":\"$SERVD_SECURITY_KEY\",\"environment\":\"$SERVD_ENVIRONMENT\"}")
+
+          # Save response to a file for parsing
+          echo "$RESPONSE" > response.json
+
+          # Check if response contains an error
+          if [[ $(echo "$RESPONSE" | jq -r '.status') != "success" ]]; then
+            echo "Error enabling database access:"
+            echo "$RESPONSE" | jq -r '.message'
+            exit 1
+          fi
+
+          # Store connection details
+          echo "DB_HOST=$(echo "$RESPONSE" | jq -r '.host')" >> $GITHUB_ENV
+          echo "DB_PORT=$(echo "$RESPONSE" | jq -r '.port')" >> $GITHUB_ENV
+          echo "DB_USER=$(echo "$RESPONSE" | jq -r '.user')" >> $GITHUB_ENV
+          echo "DB_PASSWORD=$(echo "$RESPONSE" | jq -r '.password')" >> $GITHUB_ENV
+          echo "DB_NAME=$(echo "$RESPONSE" | jq -r '.database')" >> $GITHUB_ENV
+      - name: Install MySQL client
+        run: sudo apt-get update && sudo apt-get install -y default-mysql-client
+
+      - name: Dump database
+        run: |
+          echo "Creating database dump..."
+
+          # Echo connection details for debugging
+            echo "DB_HOST: $DB_HOST"
+            echo "DB_PORT: $DB_PORT"
+            echo "DB_USER: $DB_USER"
+            echo "DB_NAME: $DB_NAME"
+
+          mysqldump --no-tablespaces --add-drop-table --quick --single-transaction --compress \
+            -h "$DB_HOST" --port "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > browser-tests-db.sql
+      - name: Upload database dump as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-tests-db
+          path: browser-tests-db.sql
+          retention-days: 7
+          overwrite: true
+
+      - name: Disable remote database connectivity
+        run: |
+          echo "Closing remote database access on Servd..."
+
+          RESPONSE=$(curl -s -X POST https://app.servd.host/disable-remote-database-connectivity \
+            -H "Content-Type: application/json" \
+            -d "{\"slug\":\"$SERVD_PROJECT_SLUG\",\"key\":\"$SERVD_SECURITY_KEY\"}")
+          echo "Response: $RESPONSE"
