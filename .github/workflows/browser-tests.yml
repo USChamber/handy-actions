@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   tests:
-    name: Pest
+    name: Browser Testing [Pest + Playwright]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
