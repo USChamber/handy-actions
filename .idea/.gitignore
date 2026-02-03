@@ -4,5 +4,16 @@
 # Editor-based HTTP Client requests
 /httpRequests/
 # Datasource local storage ignored files
-/dataSources/
+/dataSources/*
 /dataSources.local.xml
+
+# PhpStorm Shared Configuration
+# We override the default by ignoring everything and
+# then unignoring the files we want to share.
+*
+!/.gitignore
+!/codeStyles/codeStyleConfig.xml
+!/inspectionProfiles/profiles_settings.xml
+
+# GitHub Copilot persisted chat sessions
+/copilot/chatSessions
