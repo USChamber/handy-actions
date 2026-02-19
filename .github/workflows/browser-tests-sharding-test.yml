@@ -1,0 +1,156 @@
+name: Browser Testing
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      kitchen_sink_ids:
+        description: 'Comma-separated list of entry IDs to enable for Kitchen Sink tests'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  tests:
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4, 5]
+    name: Pest (Shard ${{ matrix.shard }}/5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SERVD_SECURITY_KEY: ${{ secrets.SERVD_SECURITY_KEY }}
+      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+      EMAIL_API_KEY: ${{ secrets.EMAIL_API_KEY }}
+      CRAFT_APP_ID: ${{ secrets.CRAFT_APP_ID }}
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      IMGIX_API_KEY: ${{ secrets.IMGIX_API_KEY }}
+      IMGIX_SIGN_KEY: ${{ secrets.IMGIX_SIGN_KEY }}
+      COMPUTER_VISION_API_KEY: ${{ secrets.COMPUTER_VISION_API_KEY }}
+
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: false
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy .env file
+        run: |
+          cp ./.github/workflows-env/.env ./
+
+      - name: Cache vendor directory
+        id: vendor-cache
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-vendor-${{ hashFiles('**/composer.lock') }}
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.3
+          extensions: 'bcmath,ctype,curl,dom,iconv,imagick,intl,json,mbstring,openssl,pcre,pdo,pdo_mysql,reflection,spl,zip'
+          ini-values: post_max_size=512M, max_execution_time=300, memory_limit=1024M
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install Composer dependencies
+        if: steps.vendor-cache.outputs.cache-hit != 'true'
+        run: composer install --no-interaction --no-ansi --no-progress --prefer-dist --optimize-autoloader
+        env:
+          COMPOSER_AUTH: ${{ secrets.COMPOSER_AUTH }}
+
+      - name: Install Node.js dependencies
+        id: playwright-version
+        run: |
+          npm ci --prefer-offline
+          echo "version=$(npx playwright --version | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: cache-playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright/
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps
+
+      - name: Download artifact
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: prep-cms-db-as-artifact-for-tests.yml
+          workflow_conclusion: success
+          name: browser-tests-db
+          path: ./
+
+      - name: Seed Database
+        run: |
+          php craft db/restore ./browser-tests-db.sql --interactive=0
+          ls -la
+
+      - name: Run Migrations
+        run: |
+          php craft up --interactive=0
+
+      # The "&" is necessary here to let the script continue
+      - name: Run Craft Server
+        run: |
+          php craft serve &
+
+      - name: Enable Kitchen Sink Test Entries
+        if: ${{ inputs.kitchen_sink_ids != '' }}
+        run: |
+          php craft resave/entries --element-id ${{ inputs.kitchen_sink_ids }} --set enabled --to '=true'
+
+      - name: Build front-end assets
+        run: npm run prod
+
+      - name: Run Pest tests
+        run: pest --bail --parallel --shard ${{ matrix.shard }}/5
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: |
+            tests/Browser/Screenshots/
+            tests/Browser/Console/
+            storage/logs/
+            .pest/
+            server.log
+          retention-days: 7
+          if-no-files-found: ignore
