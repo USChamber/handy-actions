@@ -149,7 +149,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: browser-test-results
+          name: browser-test-results-shard-${{ matrix.shard }}
           path: |
             tests/Browser/Screenshots/
             tests/Browser/Console/
