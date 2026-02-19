@@ -140,7 +140,7 @@ jobs:
         run: npm run prod
 
       - name: Run Pest tests
-        run: vendor/bin/pest -shard ${{ matrix.shard }}/5
+        run: vendor/bin/pest --shard ${{ matrix.shard }}/5
 #        run: vendor/bin/pest --parallel --shard ${{ matrix.shard }}/5
 #        run: vendor/bin/pest --bail --parallel --shard ${{ matrix.shard }}/5
 
