@@ -1,0 +1,146 @@
+name: Generate USCC Module Diff Links
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - production
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  reference-diffs:
+    name: Append USCC Package Diff Links
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect uschamber/* version changes and append diff links
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { execSync } = require('child_process');
+
+            // Exceptions where the repo name doesn't follow the craft-{package} pattern
+            const repoExceptions = {
+              'uschamber/component-library': 'USChamber/component-library',
+            };
+
+            // Dynamically resolve repo name: uschamber/{name} -> USChamber/craft-{name}
+            function resolveRepo(pkg) {
+              if (repoExceptions[pkg]) return repoExceptions[pkg];
+              const name = pkg.replace('uschamber/', '');
+              return `USChamber/craft-${name}`;
+            }
+
+            // Get composer.json from base branch
+            const baseSha = context.payload.pull_request.base.sha;
+            const headSha = context.payload.pull_request.head.sha;
+
+            let baseComposer, headComposer;
+            try {
+              baseComposer = JSON.parse(execSync(`git show ${baseSha}:composer.json`).toString());
+              headComposer = JSON.parse(execSync(`git show ${headSha}:composer.json`).toString());
+            } catch (e) {
+              core.warning('Could not read composer.json from one of the branches: ' + e.message);
+              return;
+            }
+
+            const baseRequire = { ...baseComposer.require, ...baseComposer['require-dev'] };
+            const headRequire = { ...headComposer.require, ...headComposer['require-dev'] };
+
+            // Extract clean version tag from composer version string
+            // e.g. "dev-fix/example-contexts as 5.16.21.1" -> "5.16.21.1"
+            // e.g. "5.16.21" -> "5.16.21"
+            function extractVersion(versionString) {
+              if (!versionString) return null;
+              const asMatch = versionString.match(/\bas\s+([\w.\-]+)$/);
+              if (asMatch) return asMatch[1];
+              if (versionString.startsWith('dev-')) return versionString;
+              return versionString.replace(/^[^0-9]*/, '');
+            }
+
+            const diffLinks = [];
+
+            // Find all uschamber/* packages across base and head
+            const allPkgs = new Set([
+              ...Object.keys(baseRequire),
+              ...Object.keys(headRequire),
+            ].filter(pkg => pkg.startsWith('uschamber/')));
+
+            for (const pkg of allPkgs) {
+              const repo = resolveRepo(pkg);
+              const oldVersionRaw = baseRequire[pkg];
+              const newVersionRaw = headRequire[pkg];
+
+              if (!oldVersionRaw || !newVersionRaw) continue;
+              if (oldVersionRaw === newVersionRaw) continue;
+
+              const oldVersion = extractVersion(oldVersionRaw);
+              const newVersion = extractVersion(newVersionRaw);
+
+              if (!oldVersion || !newVersion || oldVersion === newVersion) continue;
+
+              // Skip if either version is a dev branch with no aliased tag
+              if (oldVersion.startsWith('dev-') || newVersion.startsWith('dev-')) continue;
+
+              // Verify both tags actually exist in the repo before linking
+              const [repoOwner, repoName] = repo.split('/');
+              try {
+                await github.rest.git.getRef({ owner: repoOwner, repo: repoName, ref: `tags/${oldVersion}` });
+                await github.rest.git.getRef({ owner: repoOwner, repo: repoName, ref: `tags/${newVersion}` });
+              } catch (e) {
+                console.log(`Skipping ${pkg}: one or both tags (${oldVersion}, ${newVersion}) not found in ${repo}`);
+                continue;
+              }
+
+              const compareUrl = `https://github.com/${repo}/compare/${oldVersion}...${newVersion}`;
+              diffLinks.push(`- **${pkg}**: [\`${oldVersion}\` → \`${newVersion}\`](${compareUrl})`);
+            }
+
+            if (diffLinks.length === 0) {
+              console.log('No uschamber/* package version changes detected.');
+              return;
+            }
+
+            // Build the section to append
+            const section = [
+              '',
+              '---',
+              '### 📦 USChamber Package Diffs',
+              ...diffLinks,
+            ].join('\n');
+
+            // Get the current PR body
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const currentBody = pr.body || '';
+
+            // Remove any previously appended section to avoid duplicates on synchronize
+            const marker = '---\n### 📦 USChamber Package Diffs';
+            const cleanBody = currentBody.includes(marker)
+              ? currentBody.substring(0, currentBody.indexOf(marker)).trimEnd()
+              : currentBody;
+
+            const newBody = cleanBody + section;
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              body: newBody,
+            });
+
+            console.log('Appended diff links:\n' + diffLinks.join('\n'));
