@@ -1,4 +1,4 @@
-name: Browser Testing
+name: Browser Testing w/ Sharding
 
 on:
   workflow_dispatch:
