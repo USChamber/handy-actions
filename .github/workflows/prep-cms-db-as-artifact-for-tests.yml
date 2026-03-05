@@ -76,11 +76,11 @@ jobs:
             IGNORE_OPTS="$IGNORE_OPTS --ignore-table=$DB_NAME.$table"
           done
 
-          # Full dump, excluding data for specific tables
+          # Full dump, excluding specific tables
           mysqldump $COMMON_OPTS $IGNORE_OPTS "$DB_NAME" > browser-tests-db.sql
 
-          # Schema-only dump for the excluded tables
-          mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql
+          # Append schema for excluded tables to the full dump
+          mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql | gzip > browser-tests-db.sql.gz
 
       - name: Upload database dump as artifact
         uses: actions/upload-artifact@v4
