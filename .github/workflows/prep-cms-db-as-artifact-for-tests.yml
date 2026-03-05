@@ -69,8 +69,8 @@ jobs:
             echo "DB_USER: $DB_USER"
             echo "DB_NAME: $DB_NAME"
 
-          COMMON_OPTS="--no-tablespaces --quick --single-transaction --compress -h $DB_HOST --port $DB_PORT -u $DB_USER -p$DB_PASSWORD"
-          DATA_ONLY_TABLES="contactform_submissions searchindex feedme_logs deprecationerrors"
+          COMMON_OPTS="--no-tablespaces --quick --single-transaction --compress --skip-add-drop-table -h $DB_HOST --port $DB_PORT -u $DB_USER -p$DB_PASSWORD"
+          DATA_ONLY_TABLES="contactform_submissions deprecationerrors feedme_logs searchindex sessions tokens webauthn"
           IGNORE_OPTS=""
           for table in $DATA_ONLY_TABLES; do
             IGNORE_OPTS="$IGNORE_OPTS --ignore-table=$DB_NAME.$table"
