@@ -92,18 +92,8 @@ jobs:
               // Skip if either version is a dev branch with no aliased tag
               if (oldVersion.startsWith('dev-') || newVersion.startsWith('dev-')) continue;
 
-              // Verify both tags actually exist in the repo before linking
-              const [repoOwner, repoName] = repo.split('/');
-              try {
-                await github.rest.git.getRef({ owner: repoOwner, repo: repoName, ref: `tags/${oldVersion}` });
-                await github.rest.git.getRef({ owner: repoOwner, repo: repoName, ref: `tags/${newVersion}` });
-              } catch (e) {
-                console.log(`Skipping ${pkg}: one or both tags (${oldVersion}, ${newVersion}) not found in ${repo}`);
-                continue;
-              }
-
               const compareUrl = `https://github.com/${repo}/compare/${oldVersion}...${newVersion}`;
-              diffLinks.push(`- **${pkg}**: [\`${oldVersion}\` → \`${newVersion}\`](${compareUrl})`);
+              diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl})`);
             }
 
             if (diffLinks.length === 0) {
@@ -115,7 +105,7 @@ jobs:
             const section = [
               '',
               '---',
-              '### 📦 USChamber Package Diffs',
+              '##### USCC PACKAGE DIFFS',
               ...diffLinks,
             ].join('\n');
 
