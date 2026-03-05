@@ -3,11 +3,6 @@ name: Browser Testing w/ Sharding
 on:
   workflow_dispatch:
   workflow_call:
-    inputs:
-      kitchen_sink_ids:
-        description: 'Comma-separated list of entry IDs to enable for Kitchen Sink tests'
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -36,15 +31,6 @@ jobs:
       COMPUTER_VISION_API_KEY: ${{ secrets.COMPUTER_VISION_API_KEY }}
 
     services:
-      redis:
-        image: redis
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
       mysql:
         image: mysql:8.0
         env:
@@ -131,11 +117,6 @@ jobs:
       - name: Run Craft Server
         run: |
           php craft serve &
-
-      - name: Enable Kitchen Sink Test Entries
-        if: ${{ inputs.kitchen_sink_ids != '' }}
-        run: |
-          php craft resave/entries --element-id ${{ inputs.kitchen_sink_ids }} --set enabled --to '=true'
 
       - name: Build front-end assets
         run: npm run prod
