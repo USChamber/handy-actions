@@ -54,7 +54,7 @@ jobs:
         run: |
           cp ./.github/workflows-env/.env ./
 
-      - name: Cache vendor directory
+      - name: Cache Composer dependencies
         id: vendor-cache
         uses: actions/cache@v4
         with:
