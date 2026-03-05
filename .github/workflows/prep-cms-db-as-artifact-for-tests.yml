@@ -81,15 +81,12 @@ jobs:
 
           # Append schema for excluded tables to the full dump
           mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql
-          
-          # Compress the SQL dump
-          gzip browser-tests-db.sql
 
       - name: Upload database dump as artifact
         uses: actions/upload-artifact@v4
         with:
           name: browser-tests-db
-          path: browser-tests-db.sql.gz
+          path: browser-tests-db.sql
           retention-days: 7
           overwrite: true
 

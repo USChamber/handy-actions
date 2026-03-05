@@ -106,17 +106,8 @@ jobs:
 
       - name: Seed Database
         run: |
-          echo "Files after artifact download:"
-          ls -lah browser-tests-db.sql.gz
-          
-          echo "Decompressing database dump..."
-          gunzip browser-tests-db.sql.gz
-          
-          echo "Files after decompression:"
-          ls -lah browser-tests-db.sql
-          
-          echo "Restoring database..."
           php craft db/restore ./browser-tests-db.sql --interactive=0
+          ls -la
 
       - name: Run Migrations
         run: |
