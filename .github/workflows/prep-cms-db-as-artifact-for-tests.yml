@@ -69,8 +69,19 @@ jobs:
             echo "DB_USER: $DB_USER"
             echo "DB_NAME: $DB_NAME"
 
-          mysqldump --no-tablespaces --add-drop-table --quick --single-transaction --compress \
-            -h "$DB_HOST" --port "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > browser-tests-db.sql
+          COMMON_OPTS="--no-tablespaces --quick --single-transaction --compress -h $DB_HOST --port $DB_PORT -u $DB_USER -p$DB_PASSWORD"
+          DATA_ONLY_TABLES="contactform_submissions searchindex feedme_logs deprecationerrors"
+          IGNORE_OPTS=""
+          for table in $DATA_ONLY_TABLES; do
+            IGNORE_OPTS="$IGNORE_OPTS --ignore-table=$DB_NAME.$table"
+          done
+
+          # Full dump, excluding data for specific tables
+          mysqldump $COMMON_OPTS $IGNORE_OPTS "$DB_NAME" > browser-tests-db.sql
+
+          # Schema-only dump for the excluded tables
+          mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql
+
       - name: Upload database dump as artifact
         uses: actions/upload-artifact@v4
         with:
