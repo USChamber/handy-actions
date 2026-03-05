@@ -106,6 +106,7 @@ jobs:
 
       - name: Seed Database
         run: |
+          gunzip browser-tests-db.sql.gz
           php craft db/restore ./browser-tests-db.sql --interactive=0
           ls -la
 
