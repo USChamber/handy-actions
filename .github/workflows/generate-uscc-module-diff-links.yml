@@ -101,12 +101,14 @@ jobs:
               return;
             }
 
-            // Build the section to append
+            // Build the section to append with markers for easy replacement
             const section = [
               '',
               '---',
+              '<!-- BEGIN USCC PACKAGE DIFFS -->',
               '##### USCC PACKAGE DIFFS',
               ...diffLinks,
+              '<!-- END USCC PACKAGE DIFFS -->',
             ].join('\n');
 
             // Get the current PR body
@@ -118,13 +120,22 @@ jobs:
 
             const currentBody = pr.body || '';
 
-            // Remove any previously appended section to avoid duplicates on synchronize
-            const marker = '---\n### 📦 USChamber Package Diffs';
-            const cleanBody = currentBody.includes(marker)
-              ? currentBody.substring(0, currentBody.indexOf(marker)).trimEnd()
-              : currentBody;
-
-            const newBody = cleanBody + section;
+            // Check if USCC PACKAGE DIFFS section already exists
+            const beginMarker = '<!-- BEGIN USCC PACKAGE DIFFS -->';
+            const endMarker = '<!-- END USCC PACKAGE DIFFS -->';
+            
+            let newBody;
+            if (currentBody.includes(beginMarker) && currentBody.includes(endMarker)) {
+              // Replace existing section
+              const beginIndex = currentBody.indexOf(beginMarker);
+              const endIndex = currentBody.indexOf(endMarker) + endMarker.length;
+              const beforeSection = currentBody.substring(0, beginIndex).trimEnd();
+              const afterSection = currentBody.substring(endIndex);
+              newBody = beforeSection + '\n' + section + afterSection;
+            } else {
+              // Append new section
+              newBody = currentBody + section;
+            }
 
             await github.rest.pulls.update({
               owner: context.repo.owner,
@@ -133,4 +144,4 @@ jobs:
               body: newBody,
             });
 
-            console.log('Appended diff links:\n' + diffLinks.join('\n'));
+            console.log('Updated diff links:\n' + diffLinks.join('\n'));
