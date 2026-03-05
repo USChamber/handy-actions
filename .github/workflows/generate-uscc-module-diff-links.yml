@@ -101,10 +101,8 @@ jobs:
               return;
             }
 
-            // Build the section to append with markers for easy replacement
-            const section = [
-              '',
-              '---',
+            // Build the diff section content (without leading separator for replacement logic)
+            const sectionContent = [
               '<!-- BEGIN USCC PACKAGE DIFFS -->',
               '##### USCC PACKAGE DIFFS',
               ...diffLinks,
@@ -129,11 +127,14 @@ jobs:
               // Replace existing section
               const beginIndex = currentBody.indexOf(beginMarker);
               const endIndex = currentBody.indexOf(endMarker) + endMarker.length;
-              const beforeSection = currentBody.substring(0, beginIndex).trimEnd();
-              const afterSection = currentBody.substring(endIndex);
-              newBody = beforeSection + '\n' + section + afterSection;
+              newBody = currentBody.substring(0, beginIndex) + sectionContent + currentBody.substring(endIndex);
             } else {
               // Append new section
+              const section = [
+                '',
+                '---',
+                sectionContent,
+              ].join('\n');
               newBody = currentBody + section;
             }
 
