@@ -76,11 +76,32 @@ jobs:
             IGNORE_OPTS="$IGNORE_OPTS --ignore-table=$DB_NAME.$table"
           done
 
-          # Full dump, excluding specific tables
-          mysqldump $COMMON_OPTS $IGNORE_OPTS "$DB_NAME" > browser-tests-db.sql
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          ATTEMPT=1
 
-          # Append schema for excluded tables to the full dump
-          mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql
+          while [ $ATTEMPT -le $MAX_RETRIES ]; do
+            echo "Attempt $ATTEMPT of $MAX_RETRIES..."
+            
+            if mysqldump $COMMON_OPTS $IGNORE_OPTS "$DB_NAME" > browser-tests-db.sql && \
+               mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql; then
+              echo "Database dump completed successfully"
+              break
+            else
+              EXIT_CODE=$?
+              echo "Database dump failed with exit code $EXIT_CODE"
+              
+              if [ $ATTEMPT -lt $MAX_RETRIES ]; then
+                echo "Waiting $RETRY_DELAY seconds before retry..."
+                sleep $RETRY_DELAY
+                ATTEMPT=$((ATTEMPT + 1))
+                rm -f browser-tests-db.sql
+              else
+                echo "All retry attempts exhausted"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
 
       - name: Upload database dump as artifact
         uses: actions/upload-artifact@v4
