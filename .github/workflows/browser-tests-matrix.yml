@@ -64,13 +64,13 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: 8.3
-          extensions: 'bcmath,ctype,curl,dom,iconv,imagick,intl,json,mbstring,openssl,pcre,pdo,pdo_mysql,reflection,spl,zip'
+          extensions: "bcmath,ctype,curl,dom,iconv,imagick,intl,json,mbstring,openssl,pcre,pdo,pdo_mysql,reflection,spl,zip"
           ini-values: post_max_size=512M, max_execution_time=300, memory_limit=1024M
 
       - uses: actions/setup-node@v6
         with:
           node-version-file: ".nvmrc"
-          cache: 'npm'
+          cache: "npm"
           cache-dependency-path: package-lock.json
 
       - name: Install Composer dependencies
@@ -122,9 +122,17 @@ jobs:
         run: npm run prod
 
       - name: Run Pest tests
-        run: vendor/bin/pest --shard ${{ matrix.shard }}/5
-#        run: vendor/bin/pest --parallel --shard ${{ matrix.shard }}/5
-#        run: vendor/bin/pest --bail --parallel --shard ${{ matrix.shard }}/5
+        run: |
+          vendor/bin/pest --shard ${{ matrix.shard }}/5 | tee /tmp/test-output.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Summarize test results
+        if: success()
+        run: |
+          echo "## Shard ${{ matrix.shard }}/5 passed" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^  Tests:|^  Duration:" /tmp/test-output.txt | sed 's/^  //' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@v7
