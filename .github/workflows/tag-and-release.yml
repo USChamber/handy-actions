@@ -62,7 +62,7 @@ jobs:
     steps:
       # Generates an access token via our Github App
       - name: Generate GitHub App Token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.app_id }}
@@ -101,14 +101,14 @@ jobs:
 
       # Pushes the new tag to the the current commit in the repository
       - name: Create new tag
-        uses: anothrNick/github-tag-action@1.70.0
+        uses: anothrNick/github-tag-action@1.75.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CUSTOM_TAG: ${{ env.NEW_TAG }}
 
       # Generates a release with release notes
       - name: Generate release notes
-        uses: ncipollo/release-action@v1.14.0
+        uses: ncipollo/release-action@v1.21.0
         with:
           name: ${{ env.NEW_TAG }}
           tag: "refs/tags/${{ env.NEW_TAG }}"
