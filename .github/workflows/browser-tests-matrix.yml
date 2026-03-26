@@ -97,7 +97,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Download artifact
-        uses: dawidd6/action-download-artifact@v18
+        uses: dawidd6/action-download-artifact@v19
         with:
           workflow: prep-cms-db-as-artifact-for-tests.yml
           workflow_conclusion: success
