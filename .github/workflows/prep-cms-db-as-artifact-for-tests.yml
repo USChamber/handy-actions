@@ -17,8 +17,8 @@ on:
         description: 'Servd security key'
         required: true
       workflow_token:
-        description: 'Token for repo checkout'
-        required: false
+        description: 'Token for repo checkout and GitHub API calls'
+        required: true
 
 jobs:
   dump-database:
@@ -122,7 +122,7 @@ jobs:
 
       - name: Delete old browser-tests-db artifacts
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.workflow_token }}
         run: |
           set -e
           echo "Fetching all artifacts named browser-tests-db..."
