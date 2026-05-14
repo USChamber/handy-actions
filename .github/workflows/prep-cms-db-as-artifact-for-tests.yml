@@ -69,7 +69,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y default-mysql-client
 
       - name: Dump database
+        env:
+          TOKEN: ${{ secrets.workflow_token }}
         run: |
+          echo "workflow_token length: ${#TOKEN}"
           echo "Creating database dump..."
 
           # Echo connection details for debugging
