@@ -40,7 +40,7 @@ on:
       cypress_record_key:
         description: 'Cypress Cloud record key'
         required: true
-      github_token:
+      workflow_token:
         description: 'GitHub token for Cypress GitHub integration'
         required: false
 
@@ -62,6 +62,6 @@ jobs:
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.cypress_record_key }}
           CYPRESS_baseUrl: ${{ inputs.base_url }}
-          GITHUB_TOKEN: ${{ secrets.github_token || github.token }}
+          GITHUB_TOKEN: ${{ secrets.workflow_token || github.token }}
           COMMIT_INFO_MESSAGE: ${{ inputs.commit_message }}
           CYPRESS_PROJECT_ID: ${{ inputs.cypress_project_id }}
