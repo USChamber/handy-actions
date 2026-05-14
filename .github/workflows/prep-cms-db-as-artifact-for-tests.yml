@@ -16,6 +16,9 @@ on:
       servd_security_key:
         description: 'Servd security key'
         required: true
+      github_token:
+        description: 'Token for repo checkout'
+        required: false
 
 jobs:
   dump-database:
@@ -31,6 +34,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.github_token || github.token }}
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
