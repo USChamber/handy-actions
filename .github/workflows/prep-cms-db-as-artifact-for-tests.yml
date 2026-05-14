@@ -21,6 +21,9 @@ jobs:
   dump-database:
     runs-on: ubuntu-latest
 
+    permissions:
+      actions: write
+
     env:
       SERVD_ENVIRONMENT: ${{ inputs.servd_environment }}
       SERVD_PROJECT_SLUG: ${{ inputs.servd_project_slug }}
@@ -110,6 +113,48 @@ jobs:
           path: browser-tests-db.sql
           retention-days: 7
           overwrite: true
+
+      - name: Delete old browser-tests-db artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          echo "Fetching all artifacts named browser-tests-db..."
+
+          # --jq '.artifacts[]' streams one object per line across all pages;
+          # jq -s '.' collects them into a single flat array.
+          ARTIFACTS=$(gh api \
+            --paginate \
+            "/repos/${{ github.repository }}/actions/artifacts?name=browser-tests-db&per_page=100" \
+            --jq '.artifacts[]' \
+            | jq -s '.')
+
+          LATEST_ID=$(echo "$ARTIFACTS" | jq '[.[] | select(.expired == false)] | sort_by(.created_at) | last | .id')
+
+          if [ "$LATEST_ID" = "null" ] || [ -z "$LATEST_ID" ]; then
+            echo "No non-expired artifacts found; nothing to clean up."
+            exit 0
+          fi
+
+          echo "Latest artifact ID (will be kept): $LATEST_ID"
+
+          FAILED=0
+          while IFS= read -r OLD_ID; do
+            echo "Deleting artifact $OLD_ID..."
+            if ! gh api --method DELETE "/repos/${{ github.repository }}/actions/artifacts/$OLD_ID"; then
+              echo "Warning: failed to delete artifact $OLD_ID"
+              FAILED=1
+            fi
+          done < <(echo "$ARTIFACTS" | jq -r \
+            --argjson latest "$LATEST_ID" \
+            '.[] | select(.expired == false and .id != $latest) | .id')
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "One or more artifacts could not be deleted."
+            exit 1
+          fi
+
+          echo "Cleanup complete."
 
       - name: Disable remote database connectivity
         run: |
