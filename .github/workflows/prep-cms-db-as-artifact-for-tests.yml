@@ -16,9 +16,6 @@ on:
       servd_security_key:
         description: 'Servd security key'
         required: true
-      workflow_token:
-        description: 'Token for repo checkout and GitHub API calls'
-        required: true
 
 jobs:
   dump-database:
@@ -33,10 +30,7 @@ jobs:
       SERVD_SECURITY_KEY: ${{ secrets.servd_security_key }}
 
     steps:
-      - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.workflow_token }}
-          repository: ${{ github.event.repository.full_name }}
+      - uses: actions/checkout@v4
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -49,37 +43,30 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"slug\":\"$SERVD_PROJECT_SLUG\",\"key\":\"$SERVD_SECURITY_KEY\",\"environment\":\"$SERVD_ENVIRONMENT\"}")
 
-          # Save response to a file for parsing
           echo "$RESPONSE" > response.json
 
-          # Check if response contains an error
           if [[ $(echo "$RESPONSE" | jq -r '.status') != "success" ]]; then
             echo "Error enabling database access:"
             echo "$RESPONSE" | jq -r '.message'
             exit 1
           fi
 
-          # Store connection details
           echo "DB_HOST=$(echo "$RESPONSE" | jq -r '.host')" >> $GITHUB_ENV
           echo "DB_PORT=$(echo "$RESPONSE" | jq -r '.port')" >> $GITHUB_ENV
           echo "DB_USER=$(echo "$RESPONSE" | jq -r '.user')" >> $GITHUB_ENV
           echo "DB_PASSWORD=$(echo "$RESPONSE" | jq -r '.password')" >> $GITHUB_ENV
           echo "DB_NAME=$(echo "$RESPONSE" | jq -r '.database')" >> $GITHUB_ENV
+
       - name: Install MySQL client
         run: sudo apt-get update && sudo apt-get install -y default-mysql-client
 
       - name: Dump database
-        env:
-          TOKEN: ${{ secrets.workflow_token }}
         run: |
-          echo "workflow_token length: ${#TOKEN}"
           echo "Creating database dump..."
-
-          # Echo connection details for debugging
-            echo "DB_HOST: $DB_HOST"
-            echo "DB_PORT: $DB_PORT"
-            echo "DB_USER: $DB_USER"
-            echo "DB_NAME: $DB_NAME"
+          echo "DB_HOST: $DB_HOST"
+          echo "DB_PORT: $DB_PORT"
+          echo "DB_USER: $DB_USER"
+          echo "DB_NAME: $DB_NAME"
 
           COMMON_OPTS="--no-tablespaces --quick --single-transaction --compression-algorithms=zlib --skip-add-drop-table -h $DB_HOST --port $DB_PORT -u $DB_USER -p$DB_PASSWORD"
           DATA_ONLY_TABLES="contactform_submissions deprecationerrors feedme_logs searchindex sessions tokens webauthn"
@@ -94,7 +81,7 @@ jobs:
 
           while [ $ATTEMPT -le $MAX_RETRIES ]; do
             echo "Attempt $ATTEMPT of $MAX_RETRIES..."
-            
+
             if mysqldump $COMMON_OPTS $IGNORE_OPTS "$DB_NAME" > browser-tests-db.sql && \
                mysqldump $COMMON_OPTS --no-data "$DB_NAME" $DATA_ONLY_TABLES >> browser-tests-db.sql; then
               echo "Database dump completed successfully"
@@ -102,7 +89,7 @@ jobs:
             else
               EXIT_CODE=$?
               echo "Database dump failed with exit code $EXIT_CODE"
-              
+
               if [ $ATTEMPT -lt $MAX_RETRIES ]; then
                 echo "Waiting $RETRY_DELAY seconds before retry..."
                 sleep $RETRY_DELAY
@@ -116,56 +103,15 @@ jobs:
           done
 
       - name: Upload database dump as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: browser-tests-db
           path: browser-tests-db.sql
           retention-days: 7
           overwrite: true
 
-      - name: Delete old browser-tests-db artifacts
-        env:
-          GH_TOKEN: ${{ secrets.workflow_token }}
-        run: |
-          set -e
-          echo "Fetching all artifacts named browser-tests-db..."
-
-          # --jq '.artifacts[]' streams one object per line across all pages;
-          # jq -s '.' collects them into a single flat array.
-          ARTIFACTS=$(gh api \
-            --paginate \
-            "/repos/${{ github.repository }}/actions/artifacts?name=browser-tests-db&per_page=100" \
-            --jq '.artifacts[]' \
-            | jq -s '.')
-
-          LATEST_ID=$(echo "$ARTIFACTS" | jq '[.[] | select(.expired == false)] | sort_by(.created_at) | last | .id')
-
-          if [ "$LATEST_ID" = "null" ] || [ -z "$LATEST_ID" ]; then
-            echo "No non-expired artifacts found; nothing to clean up."
-            exit 0
-          fi
-
-          echo "Latest artifact ID (will be kept): $LATEST_ID"
-
-          FAILED=0
-          while IFS= read -r OLD_ID; do
-            echo "Deleting artifact $OLD_ID..."
-            if ! gh api --method DELETE "/repos/${{ github.repository }}/actions/artifacts/$OLD_ID"; then
-              echo "Warning: failed to delete artifact $OLD_ID"
-              FAILED=1
-            fi
-          done < <(echo "$ARTIFACTS" | jq -r \
-            --argjson latest "$LATEST_ID" \
-            '.[] | select(.expired == false and .id != $latest) | .id')
-
-          if [ "$FAILED" -ne 0 ]; then
-            echo "One or more artifacts could not be deleted."
-            exit 1
-          fi
-
-          echo "Cleanup complete."
-
       - name: Disable remote database connectivity
+        if: always()
         run: |
           echo "Closing remote database access on Servd..."
 
