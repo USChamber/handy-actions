@@ -128,7 +128,7 @@ jobs:
                   body: JSON.stringify({
                     model: 'gpt-4o-mini',
                     messages: [
-                      { role: 'system', content: 'You are a helpful assistant that summarizes software changelog entries for developers.' },
+                      { role: 'system', content: 'You are a helpful assistant that summarizes major and minor software changelog entries for developers and prioritizes anything that might be a break change. Use short, concise bullet points.' },
                       { role: 'user', content: userPrompt },
                     ],
                     max_tokens: 512,
@@ -221,7 +221,7 @@ jobs:
                 if (commits && commits.length > 0) {
                   const summary = await fetchAiSummary(pkg, oldVersion, newVersion, commits, process.env.GITHUB_TOKEN);
                   if (summary) {
-                    aiSummaryBlock = '\n  <details>\n  <summary>🤖 AI Summary</summary>\n\n' + summary + '\n  </details>';
+                    aiSummaryBlock = '\n  <details>\n  <summary>AI Summary</summary>\n\n' + summary + '\n  </details>';
                   }
                 }
               }
