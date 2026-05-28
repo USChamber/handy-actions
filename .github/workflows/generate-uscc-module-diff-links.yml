@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  models: read
 
 jobs:
   reference-diffs:
@@ -66,6 +67,87 @@ jobs:
               if (asMatch) return asMatch[1];
               if (versionString.startsWith('dev-')) return versionString;
               return versionString.replace(/^[^0-9]*/, '');
+            }
+
+            // Parse a semver-like string into { major, minor, patch } integers.
+            // Returns null if the string doesn't look like a numeric version.
+            function parseSemver(version) {
+              const m = version.match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/);
+              if (!m) return null;
+              return { major: parseInt(m[1], 10), minor: parseInt(m[2], 10), patch: parseInt(m[3] || '0', 10) };
+            }
+
+            // Returns 'major', 'minor', 'patch', or null (unparseable / no numeric bump).
+            function semverBumpType(oldVer, newVer) {
+              const o = parseSemver(oldVer);
+              const n = parseSemver(newVer);
+              if (!o || !n) return null;
+              if (n.major !== o.major) return 'major';
+              if (n.minor !== o.minor) return 'minor';
+              return 'patch';
+            }
+
+            // Fetch up to maxCommits commit messages between two tags in a repo.
+            // Returns an array of strings, or null on failure.
+            async function fetchCommitMessages(repo, base, head, maxCommits = 30) {
+              const [owner, repoName] = repo.split('/');
+              try {
+                const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                  owner,
+                  repo: repoName,
+                  basehead: `${base}...${head}`,
+                  per_page: maxCommits,
+                });
+                return comparison.data.commits
+                  .slice(0, maxCommits)
+                  .map(c => c.commit.message.split('\n')[0].trim())
+                  .filter(Boolean);
+              } catch (e) {
+                core.warning(`Could not fetch commits for ${repo} ${base}...${head}: ${e.message}`);
+                return null;
+              }
+            }
+
+            // Call the GitHub Models API and return an AI summary string, or null on failure.
+            async function fetchAiSummary(pkg, oldVer, newVer, commitMessages, githubToken) {
+              const commitList = commitMessages.map(m => `- ${m}`).join('\n');
+              const userPrompt =
+                `The Composer package \`${pkg}\` was upgraded from version ${oldVer} to ${newVer}.\n` +
+                `Here are the commit messages included in this release:\n${commitList}\n\n` +
+                `Write a concise, developer-facing bullet-point summary (5 bullets max) of what changed, ` +
+                `focusing on new features, breaking changes, and important fixes. ` +
+                `Do not repeat the version numbers or package name in the summary.`;
+
+              try {
+                const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + githubToken,
+                  },
+                  body: JSON.stringify({
+                    model: 'gpt-4o-mini',
+                    messages: [
+                      { role: 'system', content: 'You are a helpful assistant that summarizes major and minor software changelog entries for developers and prioritizes anything that might be a break change. Use short, concise bullet points.' },
+                      { role: 'user', content: userPrompt },
+                    ],
+                    max_tokens: 512,
+                    temperature: 0.3,
+                  }),
+                });
+
+                if (!response.ok) {
+                  const text = await response.text();
+                  core.warning(`GitHub Models API returned ${response.status} for ${pkg}: ${text}`);
+                  return null;
+                }
+
+                const data = await response.json();
+                return data.choices?.[0]?.message?.content?.trim() || null;
+              } catch (e) {
+                core.warning(`GitHub Models API call failed for ${pkg}: ${e.message}`);
+                return null;
+              }
             }
 
             // Fetch all release tags from a repo, sorted newest-first as returned by the API.
@@ -128,13 +210,29 @@ jobs:
                 }
               }
 
+              // Determine if this is a major or minor semver bump (warrants an AI summary)
+              const bumpType = semverBumpType(oldVersion, newVersion);
+              const needsAiSummary = bumpType === 'major' || bumpType === 'minor';
+
+              // Fetch AI summary for major/minor bumps
+              let aiSummaryBlock = '';
+              if (needsAiSummary) {
+                const commits = await fetchCommitMessages(repo, oldVersion, newVersion);
+                if (commits && commits.length > 0) {
+                  const summary = await fetchAiSummary(pkg, oldVersion, newVersion, commits, process.env.GITHUB_TOKEN);
+                  if (summary) {
+                    aiSummaryBlock = '\n  <details>\n  <summary>AI Summary</summary>\n\n' + summary + '\n  </details>';
+                  }
+                }
+              }
+
               if (hasIntermediateReleases) {
                 // Push two separate bullet lines so each renders on its own line
                 const latestOnlyUrl = `https://github.com/${repo}/compare/${prevTag}...${newVersion}`;
-                diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl}) _(all included releases)_`);
+                diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl}) _(all included releases)_${aiSummaryBlock}`);
                 diffLinks.push(`- **${pkg}**: [\`${prevTag} → ${newVersion}\`](${latestOnlyUrl}) _(latest release only)_`);
               } else {
-                diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl})`);
+                diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl})${aiSummaryBlock}`);
               }
             }
 
