@@ -68,6 +68,23 @@ jobs:
               return versionString.replace(/^[^0-9]*/, '');
             }
 
+            // Fetch all release tags from a repo, sorted newest-first as returned by the API.
+            // Returns an array of tag name strings, or null if the request fails.
+            async function fetchReleaseTags(repo) {
+              const [owner, repoName] = repo.split('/');
+              try {
+                const releases = await github.paginate(
+                  github.rest.repos.listReleases,
+                  { owner, repo: repoName, per_page: 100 },
+                  (response) => response.data.map(r => r.tag_name)
+                );
+                return releases;
+              } catch (e) {
+                core.warning(`Could not fetch releases for ${repo}: ${e.message}`);
+                return null;
+              }
+            }
+
             const diffLinks = [];
 
             // Find all uschamber/* packages across base and head
@@ -93,7 +110,32 @@ jobs:
               if (oldVersion.startsWith('dev-') || newVersion.startsWith('dev-')) continue;
 
               const compareUrl = `https://github.com/${repo}/compare/${oldVersion}...${newVersion}`;
-              diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl})`);
+
+              // Check whether more than one release sits between oldVersion and newVersion
+              // by looking up the release immediately before newVersion in the API-sorted list.
+              const tags = await fetchReleaseTags(repo);
+
+              let hasIntermediateReleases = false;
+              let prevTag = null;
+              if (tags && tags.length > 0) {
+                // tags are newest-first from the API
+                const newIdx = tags.indexOf(newVersion);
+                if (newIdx !== -1 && newIdx + 1 < tags.length) {
+                  prevTag = tags[newIdx + 1]; // the release just before newVersion
+                  if (prevTag !== oldVersion) {
+                    hasIntermediateReleases = true;
+                  }
+                }
+              }
+
+              if (hasIntermediateReleases) {
+                // Push two separate bullet lines so each renders on its own line
+                const latestOnlyUrl = `https://github.com/${repo}/compare/${prevTag}...${newVersion}`;
+                diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl}) _(all included releases)_`);
+                diffLinks.push(`- **${pkg}**: [\`${prevTag} → ${newVersion}\`](${latestOnlyUrl}) _(latest release only)_`);
+              } else {
+                diffLinks.push(`- **${pkg}**: [\`${oldVersion} → ${newVersion}\`](${compareUrl})`);
+              }
             }
 
             if (diffLinks.length === 0) {
