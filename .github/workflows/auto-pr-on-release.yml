@@ -156,11 +156,11 @@ jobs:
 
           # Update the version constraint in composer.json via jq
           if jq -e ".require[\"$PACKAGE\"]" ${{ inputs.composer_json_path }} > /dev/null 2>&1; then
-            jq ".require[\"$PACKAGE\"] = \"$CONSTRAINT\"" ${{ inputs.composer_json_path }} > /tmp/composer.json.tmp
-            mv /tmp/composer.json.tmp ${{ inputs.composer_json_path }}
-          elif jq -e '."require-dev"["'"$PACKAGE"'"]' ${{ inputs.composer_json_path }} > /dev/null 2>&1; then
-            jq '."require-dev"["'"$PACKAGE"'"] = "'"$CONSTRAINT"'"' ${{ inputs.composer_json_path }} > /tmp/composer.json.tmp
-            mv /tmp/composer.json.tmp ${{ inputs.composer_json_path }}
+            jq ".require[\"$PACKAGE\"] = \"$CONSTRAINT\"" ${{ inputs.composer_json_path }} > /tmp/composer.json.tmp \
+              && mv /tmp/composer.json.tmp ${{ inputs.composer_json_path }}
+          elif jq -e ".\"require-dev\"[\"$PACKAGE\"]" ${{ inputs.composer_json_path }} > /dev/null 2>&1; then
+            jq ".\"require-dev\"[\"$PACKAGE\"] = \"$CONSTRAINT\"" ${{ inputs.composer_json_path }} > /tmp/composer.json.tmp \
+              && mv /tmp/composer.json.tmp ${{ inputs.composer_json_path }}
           else
             echo "Package $PACKAGE not found in require or require-dev — skipping composer.json update."
           fi
