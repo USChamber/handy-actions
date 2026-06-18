@@ -1,0 +1,76 @@
+name: dependabot-pr-review
+
+on:
+  workflow_call:
+    secrets:
+      app_id:
+        description: 'GitHub App ID for generating a token with write access'
+        required: true
+      private_key:
+        description: 'GitHub App private key'
+        required: true
+      anthropic_api_key:
+        description: 'Anthropic API key for Claude Code'
+        required: true
+
+jobs:
+  claude-review:
+    name: Claude dependency audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.private_key }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Build audit prompt from PR diff
+        id: prompt
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Dependabot single-package title format: "Bump vendor/package from X.Y.Z to A.B.C"
+          if echo "$PR_TITLE" | grep -qE '^Bump [^ ]+ from [^ ]+ to [^ ]+$'; then
+            PACKAGE=$(echo "$PR_TITLE" | awk '{print $2}')
+            FROM_VERSION=$(echo "$PR_TITLE" | awk '{print $4}')
+            TO_VERSION=$(echo "$PR_TITLE" | awk '{print $6}')
+            echo "prompt=/dependency-needs-audit $PACKAGE $FROM_VERSION $TO_VERSION" >> $GITHUB_OUTPUT
+          else
+            # Grouped PR or non-standard title — extract changed packages from composer.lock diff
+            CHANGED=$(git diff "$BASE_SHA" "$HEAD_SHA" -- composer.lock \
+              | grep -E '^\+.*"name":' \
+              | sed 's/.*"name": "\(.*\)".*/\1/' \
+              | sort -u \
+              | tr '\n' ' ' \
+              | xargs)
+
+            if [ -n "$CHANGED" ]; then
+              echo "prompt=/dependency-needs-audit $CHANGED" >> $GITHUB_OUTPUT
+            else
+              echo "prompt=/dependency-needs-audit" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Run Claude dependency audit
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic_api_key }}
+          allowed_bots: "dependabot[bot]"
+          github_token: ${{ steps.app-token.outputs.token }}
+          plugin_marketplaces: "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/USChamber/claude-plugins.git"
+          plugins: "common@USChamber"
+          prompt: ${{ steps.prompt.outputs.prompt }}

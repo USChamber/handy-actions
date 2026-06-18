@@ -195,3 +195,56 @@ jobs:
 7. It commits the changes to a new `deps/{package}-{version}` branch and pushes it
 8. It opens a draft PR against the target branch with a compare diff link
 9. Claude runs the `dependency-needs-audit` skill and posts a full audit (breaking changes, behavioral changes, deprecations, new capabilities) as a PR comment
+
+---
+
+## Dependabot PR Review
+
+This reusable workflow reacts to Dependabot pull requests and runs a Claude dependency audit as a PR comment. It parses the PR title (or falls back to the `composer.lock` diff) to extract the package name and versions, then invokes the `dependency-needs-audit` skill to surface breaking changes, behavioral changes, deprecations, and new capabilities.
+
+### Features
+
+- **Automatic triggering**: Runs on any Dependabot PR (`opened` or `synchronize`)
+- **Smart version extraction**: Parses the Dependabot PR title for single-package bumps; falls back to parsing the `composer.lock` diff for grouped PRs
+- **Claude audit**: Runs the [`dependency-needs-audit`](https://github.com/USChamber/claude-plugins) skill and posts results as a PR comment
+- **GitHub App token**: Uses a GitHub App token to bypass the bot-on-bot security gate that blocks the default `GITHUB_TOKEN` on Dependabot PRs
+
+### Usage
+
+Create a caller workflow in your repo:
+
+```yaml
+name: dependabot-pr-review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  claude-review:
+    if: github.actor == 'dependabot[bot]'
+    uses: USChamber/handy-actions/.github/workflows/dependabot-pr-review.yml@main
+    secrets:
+      app_id: ${{ vars.GITHUB_APP_ID }}
+      private_key: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### Configuration Options
+
+#### Secrets
+
+| Name | Description | Required |
+|------|-------------|----------|
+| `app_id` | GitHub App ID for generating a token with write access | Yes |
+| `private_key` | GitHub App private key | Yes |
+| `anthropic_api_key` | Anthropic API key for Claude Code | Yes |
+
+### How It Works
+
+1. A Dependabot PR is opened or updated against your repository
+2. The caller workflow fires and invokes this reusable workflow
+3. A GitHub App token is generated to bypass the bot-on-bot security restriction on Dependabot PRs
+4. The PR title is inspected — if it matches the single-package Dependabot format (`Bump vendor/package from X to Y`), the package name and versions are extracted directly
+5. For grouped PRs or non-standard titles, the `composer.lock` diff is parsed to identify updated packages
+6. Claude runs the `dependency-needs-audit` skill with the extracted package and version info and posts a full audit as a PR comment
