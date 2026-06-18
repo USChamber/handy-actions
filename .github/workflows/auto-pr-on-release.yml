@@ -1,0 +1,236 @@
+name: auto-pr-on-release
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: 'Composer package to watch (e.g. craftcms/cms). Must match its GitHub org/repo slug.'
+        required: false
+        type: string
+        default: 'craftcms/cms'
+      composer_json_path:
+        description: 'Path to composer.json in the calling repo'
+        required: false
+        type: string
+        default: 'composer.json'
+      pr_target_branch:
+        description: 'Branch to open the PR against'
+        required: false
+        type: string
+        default: 'production'
+      php_version:
+        description: 'PHP version for composer operations'
+        required: false
+        type: string
+        default: '8.3'
+    secrets:
+      app_id:
+        description: 'GitHub App ID for generating a token with write access'
+        required: true
+      private_key:
+        description: 'GitHub App private key'
+        required: true
+      anthropic_api_key:
+        description: 'Anthropic API key for Claude Code'
+        required: true
+
+jobs:
+  check-and-upgrade:
+    name: Check for ${{ inputs.package }} updates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.private_key }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Detect current and latest versions
+        id: versions
+        env:
+          PACKAGE: ${{ inputs.package }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Read installed version from composer.lock
+          CURRENT_VERSION=$(php -r '
+            $package = getenv("PACKAGE");
+            $lock = json_decode(file_get_contents("composer.lock"), true);
+            $all = array_merge($lock["packages"] ?? [], $lock["packages-dev"] ?? []);
+            foreach ($all as $pkg) {
+              if ($pkg["name"] === $package) {
+                echo $pkg["version"];
+                break;
+              }
+            }
+          ')
+
+          # Strip leading v
+          CURRENT_VERSION="${CURRENT_VERSION#v}"
+
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "Could not find $PACKAGE in composer.lock — skipping."
+            echo "needs_upgrade=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Fetch latest release from GitHub API
+          LATEST_VERSION=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$PACKAGE/releases/latest" | jq -r '.tag_name')
+
+          # Strip leading v
+          LATEST_VERSION="${LATEST_VERSION#v}"
+
+          if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
+            echo "Could not fetch latest release for $PACKAGE — skipping."
+            echo "needs_upgrade=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Derive branch-friendly slug from package name (e.g. craftcms/cms -> craftcms-cms)
+          PACKAGE_SLUG="${PACKAGE//\//-}"
+
+          echo "Current: $CURRENT_VERSION"
+          echo "Latest:  $LATEST_VERSION"
+          echo "Slug:    $PACKAGE_SLUG"
+
+          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+          echo "PACKAGE_SLUG=$PACKAGE_SLUG" >> $GITHUB_ENV
+
+          if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+            echo "Already up to date — no PR needed."
+            echo "needs_upgrade=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upgrade available: $CURRENT_VERSION → $LATEST_VERSION"
+            echo "needs_upgrade=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for existing PR
+        if: steps.versions.outputs.needs_upgrade == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          BRANCH="deps/$PACKAGE_SLUG-$LATEST_VERSION"
+          COUNT=$(gh pr list \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq 'length')
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "An open PR already exists for branch $BRANCH — skipping."
+            echo "NEEDS_UPGRADE=false" >> $GITHUB_ENV
+          else
+            echo "NEEDS_UPGRADE=true" >> $GITHUB_ENV
+          fi
+
+      - name: Setup PHP
+        if: env.NEEDS_UPGRADE == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php_version }}
+          extensions: mbstring, xml, curl, zip
+          coverage: none
+
+      - name: Update composer.json and run composer update
+        id: composer
+        if: env.NEEDS_UPGRADE == 'true'
+        continue-on-error: true
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          CONSTRAINT="^$LATEST_VERSION"
+
+          # Update the version constraint in composer.json via jq
+          if jq -e ".require[\"$PACKAGE\"]" ${{ inputs.composer_json_path }} > /dev/null 2>&1; then
+            jq ".require[\"$PACKAGE\"] = \"$CONSTRAINT\"" ${{ inputs.composer_json_path }} > /tmp/composer.json.tmp
+            mv /tmp/composer.json.tmp ${{ inputs.composer_json_path }}
+          elif jq -e '."require-dev"["'"$PACKAGE"'"]' ${{ inputs.composer_json_path }} > /dev/null 2>&1; then
+            jq '."require-dev"["'"$PACKAGE"'"] = "'"$CONSTRAINT"'"' ${{ inputs.composer_json_path }} > /tmp/composer.json.tmp
+            mv /tmp/composer.json.tmp ${{ inputs.composer_json_path }}
+          else
+            echo "Package $PACKAGE not found in require or require-dev — skipping composer.json update."
+          fi
+
+          # Run composer update for the package
+          composer update "$PACKAGE" \
+            --no-interaction \
+            --prefer-stable \
+            --with-dependencies \
+            --no-scripts \
+            --no-progress
+
+      - name: Note composer failure
+        if: env.NEEDS_UPGRADE == 'true' && steps.composer.outcome == 'failure'
+        run: echo "COMPOSER_FAILED=true" >> $GITHUB_ENV
+
+      - name: Create branch and commit
+        if: env.NEEDS_UPGRADE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          BRANCH="deps/$PACKAGE_SLUG-$LATEST_VERSION"
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -b "$BRANCH"
+          git add composer.json composer.lock
+          git commit -m "chore: upgrade ${{ inputs.package }} to $LATEST_VERSION"
+          git push origin "$BRANCH"
+
+          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
+
+      - name: Create draft PR
+        if: env.NEEDS_UPGRADE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          COMPARE_URL="https://github.com/$PACKAGE/compare/$CURRENT_VERSION...$LATEST_VERSION"
+
+          if [ "${COMPOSER_FAILED:-false}" = "true" ]; then
+            COMPOSER_NOTE="\n\n> ⚠️ **Note:** \`composer update\` failed. The \`composer.json\` constraint has been updated but \`composer.lock\` may not reflect the new version. Manual resolution may be required."
+          else
+            COMPOSER_NOTE=""
+          fi
+
+          PR_BODY="## Dependency Upgrade: $PACKAGE $CURRENT_VERSION → $LATEST_VERSION
+
+**Compare diff:** $COMPARE_URL
+
+> ⏳ Claude is analyzing breaking changes — check back shortly.$COMPOSER_NOTE
+
+---
+
+*This PR was opened automatically by the [auto-pr-on-release](https://github.com/USChamber/handy-actions/blob/main/.github/workflows/auto-pr-on-release.yml) workflow.*"
+
+          gh pr create \
+            --draft \
+            --title "chore: upgrade $PACKAGE to $LATEST_VERSION" \
+            --base "${{ inputs.pr_target_branch }}" \
+            --head "$BRANCH" \
+            --body "$PR_BODY"
+
+      - name: Run Claude dependency audit
+        if: env.NEEDS_UPGRADE == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic_api_key }}
+          plugin_marketplaces: "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/USChamber/claude-plugins.git"
+          plugins: "common@USChamber"
+          prompt: "/dependency-needs-audit ${{ inputs.package }} ${{ env.CURRENT_VERSION }} ${{ env.LATEST_VERSION }}"
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
