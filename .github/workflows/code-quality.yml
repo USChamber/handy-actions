@@ -24,20 +24,10 @@ on:
         type: boolean
         default: true
       run_php_checks:
-        description: 'Master switch for all PHP checks (ECS, Pint, PHPStan)'
+        description: 'Whether to run PHP checks (ECS and PHPStan)'
         required: false
         type: boolean
         default: true
-      run_ecs:
-        description: 'Whether to run ECS coding standards checks (composer check-cs)'
-        required: false
-        type: boolean
-        default: true
-      run_pint:
-        description: 'Whether to run Laravel Pint coding standards checks'
-        required: false
-        type: boolean
-        default: false
       php_extensions:
         description: 'PHP extensions to install'
         required: false
@@ -74,21 +64,16 @@ jobs:
         run: npx eslint ${{ inputs.eslint_target }} --fix
 
   php_code_analysis:
+    if: inputs.run_php_checks
     strategy:
       fail-fast: false
       matrix:
         actions:
           - name: 'PHP Coding Standards [ECS]'
             run: composer check-cs
-            enabled: ${{ inputs.run_ecs }}
-          - name: 'PHP Coding Standards [Pint]'
-            run: vendor/bin/pint --test
-            enabled: ${{ inputs.run_pint }}
-          - name: 'PHP Static Analysis [PHPStan]'
+          - name: 'PHP Coding Standards [PHPStan]'
             run: composer phpstan
-            enabled: true
 
-    if: inputs.run_php_checks && matrix.actions.enabled
     name: ${{ matrix.actions.name }}
     runs-on: ubuntu-latest
 
