@@ -24,7 +24,7 @@ on:
         type: boolean
         default: true
       run_php_checks:
-        description: 'Whether to run PHP checks (ECS and PHPStan)'
+        description: 'Whether to run PHP checks (Pint and PHPStan)'
         required: false
         type: boolean
         default: true
@@ -69,7 +69,7 @@ jobs:
       fail-fast: false
       matrix:
         actions:
-          - name: 'PHP Coding Standards [ECS]'
+          - name: 'PHP Coding Standards [Pint]'
             run: composer check-cs
           - name: 'PHP Coding Standards [PHPStan]'
             run: composer phpstan
